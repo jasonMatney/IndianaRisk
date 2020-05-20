@@ -179,6 +179,12 @@ gbm_IN_22c <-  h2o.gbm(
   seed = 123
 )
 
+
+# Variable Importance
+h2o.varimp_plot(gbm_IN_22c)
+
+h2o.performance(gbm_IN_22c, test)
+
 #########################
 ### DALEX explainers ####
 #########################
@@ -227,4 +233,8 @@ resids_glm <- DALEX::model_performance(explainer_glm)
 resids_rf  <- model_performance(explainer_rf)
 resids_gbm <- model_performance(explainer_gbm)
 
+# create comparison plot of residuals for each model
+p1 <- plot(resids_glm, resids_rf, resids_gbm)
+p2 <- plot(resids_glm, resids_rf, resids_gbm, geom = "boxplot")
 
+gridExtra::grid.arrange(p1, p2, nrow = 1)
