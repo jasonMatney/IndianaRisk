@@ -12,7 +12,7 @@ dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\data\\"
 # ---Apply h2o library   ------- #
 setwd(dsn)
 
-IN_22_scale <- as.data.frame(read.csv(paste0(dsn,"IN_ML_scale.csv")))
+IN_22_scale <- as.data.frame(read.csv(paste0(dsn,"IN_DL_scale.csv")))
 IN_22_scale
 names(IN_22_scale)
 
@@ -87,8 +87,8 @@ rf_IN_22c <- h2o.randomForest(        ## h2o.randomForest function
   
   ##   not required, but helps use Flow
   ntrees = 200,                  ## use a maximum of 200 trees to create the
-  max_depth = 60, 
-  stopping_rounds = 2,           ## Stop fitting new trees when the 2-tree
+  max_depth = 60,
+  stopping_metric = "MAE", 
   #  keep_cross_validation_predictions = T,
   stopping_tolerance = 1e-2,     ##
   score_each_iteration = T,      ## Predict against training and validation for
@@ -131,7 +131,8 @@ glm_IN_22c <- h2o.glm(family= "gaussian",
               training_frame = train,
               validation_frame = valid,  
               seed = 111,
-              lambda = 0)               
+              lambda = 0,
+              early_stopping = TRUE)               
 
 h2o.coef(glm_IN_22c)
 
@@ -176,7 +177,11 @@ gbm_IN_22c <-  h2o.gbm(
   y = response,
   training_frame = train,
   validation_frame = valid,  
-  seed = 123
+  seed = 123,
+  stopping_metric = "MAE", 
+  #  keep_cross_validation_predictions = T,
+  stopping_tolerance = 1e-2,     ##
+  score_each_iteration = T,
 )
 
 
