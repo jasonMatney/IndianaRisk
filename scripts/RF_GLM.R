@@ -12,12 +12,14 @@ dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\data\\"
 # ---Apply h2o library   ------- #
 setwd(dsn)
 
+IN.df <- as.data.frame(read.csv(paste0(dsn,"IndianaRisk.csv")))
 IN_22_scale <- as.data.frame(read.csv(paste0(dsn,"IN_DL_scale.csv")))
-IN_22_scale
-names(IN_22_scale)
+colnames(IN_22_scale) <- names(IN.df)
 
+IN_22_scale <- IN_22_scale[ , -which(names(IN_22_scale) %in% c("subwatershed"))]
+head(IN_22_scale)
 # # Clean slate - just in case the cluster was already running
-h2o.removeAll() ''
+h2o.removeAll()
 # 
 # # Cluster Info
 h2o.clusterInfo()
@@ -59,7 +61,7 @@ h2o.init(ip='localhost', port=54321, nthreads=-1, max_mem_size = '20g')
 IN_22c <- as.h2o(IN_22_scale)
 
 ## Splits datasets into train, valid and test
-splits <- h2o.splitFrame(data=IN_22c, ratios=c(0.8, 0.15), seed=1236)
+splits <- h2o.splitFrame(data=IN_df, ratios=c(0.74, 0.117), seed=1236)
 names(splits) <- c("train","valid","test")
 
 ## assign the first result the R variable train
@@ -83,14 +85,15 @@ rf_IN_22c <- h2o.randomForest(        ## h2o.randomForest function
   validation_frame = valid,      ## the H2O frame for validation (not required)
   x=predictors,                  ## the predictor columns, by column index
   y=response,                    ## the target index (what we are predicting)
-  nfolds=4,
+  nfolds=10,
   
   ##   not required, but helps use Flow
-  ntrees = 200,                  ## use a maximum of 200 trees to create the
-  max_depth = 60,
-  stopping_metric = "MAE", 
-  #  keep_cross_validation_predictions = T,
-  stopping_tolerance = 1e-2,     ##
+  ntrees = 200,                  ## use a maximum of 200 trees
+  max_depth = 10,
+  stopping_metric = "deviance",
+  stopping_rounds = 5,
+  keep_cross_validation_predictions = T,
+  stopping_tolerance = 0,     ##
   score_each_iteration = T,      ## Predict against training and validation for
   ## each tree. Default will skip several. fold_assignment = stratified,
   seed = 111)                    ## Set the random seed so that this can be reproduced.
@@ -132,6 +135,7 @@ glm_IN_22c <- h2o.glm(family= "gaussian",
               validation_frame = valid,  
               seed = 111,
               lambda = 0,
+              max_active_predictors = 1,
               early_stopping = TRUE)               
 
 h2o.coef(glm_IN_22c)
@@ -178,7 +182,7 @@ gbm_IN_22c <-  h2o.gbm(
   training_frame = train,
   validation_frame = valid,  
   seed = 123,
-  stopping_metric = "MAE", 
+  stopping_metric = "RMSE", 
   #  keep_cross_validation_predictions = T,
   stopping_tolerance = 1e-2,     ##
   score_each_iteration = T,
@@ -243,3 +247,22 @@ p1 <- plot(resids_glm, resids_rf, resids_gbm)
 p2 <- plot(resids_glm, resids_rf, resids_gbm, geom = "boxplot")
 
 gridExtra::grid.arrange(p1, p2, nrow = 1)
+
+
+
+##############
+### VIF ######
+##############
+
+library(tidyverse)
+library(caret)
+
+IN_df <- IN_22_scale[ , -which(names(IN_22_scale) %in% c("orb25yr24ha_am", "orb2yr24ha_am", "orb50yr24ha_am"))]
+
+IN_df <- IN_df[ , -which(names(IN_df) %in% c("lu_21_area", "lu_22_area", "lu_41_area", "lu_23_area", 
+                                             "lu_82_area", "lu_24_area", "population", "area", "x_area", 
+                                             "housing_density", "watershed_length", "perimeter"))]
+
+mod <- lm(claims_total_building_insurance_coverage_avg ~., data=IN_df)
+a <- car::vif(mod)
+sort(round(a,2))
