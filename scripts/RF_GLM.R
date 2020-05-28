@@ -58,10 +58,10 @@ h2o.init(ip='localhost', port=54321, nthreads=-1, max_mem_size = '20g')
 # names(IN_22)
 
 # convert into H2O frame
-IN_22c <- as.h2o(IN_22_scale)
+IN_dfc <- as.h2o(IN_df)
 
 ## Splits datasets into train, valid and test
-splits <- h2o.splitFrame(data=IN_df, ratios=c(0.74, 0.117), seed=1236)
+splits <- h2o.splitFrame(data=IN_dfc, ratios=c(0.74, 0.117), seed=1236)
 names(splits) <- c("train","valid","test")
 
 ## assign the first result the R variable train
@@ -71,7 +71,9 @@ test <- h2o.assign(splits[[3]],  "test.hex")     ## R test, H2O test.hex
 
 # Define response and predictors #
 response <- "claims_total_building_insurance_coverage_avg"
-predictors <- names(IN_22_scale[,which(!names(IN_22_scale) %in% c("subwatershed", "claims_total_building_insurance_coverage_avg"))])
+predictors <- names(IN_22_scale[,which(!names(IN_22_scale) %in% c("subwatershed", "claims_total_building_insurance_coverage_avg", "orb25yr24ha_am", "orb2yr24ha_am", "orb50yr24ha_am", "lu_21_area", "lu_22_area", "lu_41_area", "lu_23_area", 
+                                                                  "lu_82_area", "lu_24_area", "population", "area", "x_area", 
+                                                                  "housing_density", "watershed_length", "perimeter"))])
 gc()
 
 ###################
@@ -259,10 +261,15 @@ library(caret)
 
 IN_df <- IN_22_scale[ , -which(names(IN_22_scale) %in% c("orb25yr24ha_am", "orb2yr24ha_am", "orb50yr24ha_am"))]
 
-IN_df <- IN_df[ , -which(names(IN_df) %in% c("lu_21_area", "lu_22_area", "lu_41_area", "lu_23_area", 
+IN_df <- IN_df[ , -which(names(IN_df) %in% c("orb25yr24ha_am", "orb2yr24ha_am", "orb50yr24ha_am", "lu_21_area", "lu_22_area", "lu_41_area", "lu_23_area", 
                                              "lu_82_area", "lu_24_area", "population", "area", "x_area", 
                                              "housing_density", "watershed_length", "perimeter"))]
 
 mod <- lm(claims_total_building_insurance_coverage_avg ~., data=IN_df)
 a <- car::vif(mod)
 sort(round(a,2))
+
+
+write.csv(as.data.frame(train),"train_reduced.csv")
+write.csv(as.data.frame(test),"test_reduced.csv")
+write.csv(as.data.frame(valid),"valid_reduced.csv")
