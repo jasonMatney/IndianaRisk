@@ -8,16 +8,25 @@ library(openxlsx)
 
 # data
 # dsn <- "C:\\Users\\jmatney\\Documents\\ML Research\\data\\"
-dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\data\\"
+dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\data\\model\\"
 # ---Apply h2o library   ------- #
 setwd(dsn)
 
-IN.df <- as.data.frame(read.csv(paste0(dsn,"IndianaRisk.csv")))
-IN_22_scale <- as.data.frame(read.csv(paste0(dsn,"IN_DL_scale.csv")))
-colnames(IN_22_scale) <- names(IN.df)
+IN_df <- read.xlsx(paste0(dsn,"IN_Risk_Model.xlsx"))
 
-IN_22_scale <- IN_22_scale[ , -which(names(IN_22_scale) %in% c("subwatershed"))]
-head(IN_22_scale)
+head(IN_df)
+
+# IN_22_scale <- as.data.frame(read.csv(paste0(dsn,"IN_DL_scale.csv")))
+# colnames(IN_22_scale) <- names(IN.df)
+
+# IN_df <- IN.df[ , -which(names(IN.df) %in% c("orb25yr24ha_am", "orb2yr24ha_am", "orb50yr24ha_am", "orb25yr24ha_am", "orb2yr24ha_am", "orb50yr24ha_am", "lu_21_area", "lu_22_area", "lu_41_area", "lu_23_area", 
+#                                           "lu_82_area", "lu_24_area", "population", "area", "x_area", 
+#                                           "housing_density", "watershed_length", "perimeter"))]
+
+#IN_22_scale <- IN_22_scale[ , -which(names(IN_22_scale) %in% c("subwatershed"))]
+
+dim(IN_df)
+
 # # Clean slate - just in case the cluster was already running
 h2o.removeAll()
 # 
@@ -32,51 +41,83 @@ h2o.init(ip='localhost', port=54321, nthreads=-1, max_mem_size = '20g')
 # To shutdown cluster 
 # h2o.shutdown(prompt=TRUE)
 
-# head(IN_22_sub)
-# 
-# drops <- c("claims_amt_paid_building_avg", 
-#            "claims_amt_paid_contents_avg",  
-#            "claims_total_contents_insurance_coverage_avg",
-#            "claims_amt_paid_building_sum",
-#            "claims_amt_paid_contents_sum",
-#            "claims_total_building_insurance_coverage_sum",
-#            "claims_total_contents_insurance_coverage_sum",
-#            "policy_total_contents_coverage_avg",
-#            "policy_total_insurance_premium_avg",
-#            "policy_total_building_coverage_sum",
-#            "policy_total_building_coverage_sum",
-#            "policy_total_contents_coverage_sum",
-#           "orb100yr06h", "orb100yr06ha_am", "orb100yr12h",                          
-#           "orb100yr12ha_am", "orb100yr24h",                       
-#           "orb25yr06h", "orb25yr06ha_am", "orb25yr12h",                           
-#           "orb25yr12ha_am", "orb25yr24h",                        
-#           "orb2yr06h", "orb2yr06ha_am", "orb2yr12h",                            
-#           "orb2yr12ha_am", "orb2yr24h",                         
-#           "orb50yr06h", "orb50yr06ha_am", "orb50yr12h",                           
-#           "orb50yr12ha_am", "orb50yr24h")
-# IN_22 <- IN_22_sub[, !names(IN_22_sub) %in% drops]
-# names(IN_22)
-
+head(IN_df)
 # convert into H2O frame
-IN_22c <- as.h2o(IN_22_scale)
+IN_dfc <- as.h2o(IN_df)
 
 ## Splits datasets into train, valid and test
-splits <- h2o.splitFrame(data=IN_df, ratios=c(0.74, 0.117), seed=1236)
+splits <- h2o.splitFrame(data=IN_dfc, ratios=c(0.74, 0.117), seed=1236)
 names(splits) <- c("train","valid","test")
 
+traintest_path <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\data\\trainTestValid\\"
+
+# x_train <- read.csv(paste0(traintest_path, "x_train_model.csv"))
+# y_train <- read.csv(paste0(traintest_path, "y_train_model.csv"))
+# x_valid <- read.csv(paste0(traintest_path, "x_valid_model.csv"))
+# y_valid <- read.csv(paste0(traintest_path, "y_valid_model.csv"))
+# x_test <- read.csv(paste0(traintest_path, "x_test_model.csv"))
+# y_test <- read.csv(paste0(traintest_path, "y_test_model.csv"))
+# 
+# drops <- c("X.x", "X.y","subwatershed")
+
+train_df <-x_train %>% left_join(y_train, "subwatershed")
+train_mod <- train_df[ , !(names(train_df) %in% drops)]
+
+valid_df <-x_valid %>% left_join(y_valid, "subwatershed")
+valid_mod <- valid_df[ , !(names(valid_df) %in% drops)]
+
+test_df <-x_test %>% left_join(y_test, "subwatershed")
+test_mod <- test_df[ , !(names(test_df) %in% drops)]
+
+
 ## assign the first result the R variable train
-train <- h2o.assign(splits[[1]], "train.hex")   ## and the H2O name train.hex
-valid <- h2o.assign(splits[[2]], "valid.hex")   ## R valid, H2O valid.hex
-test <- h2o.assign(splits[[3]],  "test.hex")     ## R test, H2O test.hex
+train <- as.h2o(train_mod) #h2o.assign(splits[[1]], "train.hex")   ## and the H2O name train.hex
+valid <- as.h2o(valid_mod) #h2o.assign(splits[[2]], "valid.hex")   ## R valid, H2O valid.hex
+test <- as.h2o(test_mod) #h2o.assign(splits[[3]],  "test.hex")     ## R test, H2O test.hex
+
+##############
+### VIF ######
+##############
+
+# library(tidyverse)
+# library(caret)
+# 
+# IN_df <- IN_22_scale[ , -which(names(IN_22_scale) %in% c("orb25yr24ha_am", "orb2yr24ha_am", "orb50yr24ha_am"))]
+# 
+# IN_df <- IN_df[ , -which(names(IN_df) %in% c("orb25yr24ha_am", "orb2yr24ha_am", "orb50yr24ha_am", "lu_21_area", "lu_22_area", "lu_41_area", "lu_23_area", 
+#                                              "lu_82_area", "lu_24_area", "population", "area", "x_area", 
+#                                              "housing_density", "watershed_length", "perimeter"))]
+# 
+# IN_df[1] <- IN.df[1]
+# dim(IN_df)
+# write.csv(IN_df, "use_this_data.csv")
+# mod <- lm(claims_total_building_insurance_coverage_avg ~., data=IN_df)
+# a <- car::vif(mod)
+# sort(round(a,2))
+# 
+# 
+# getwd()
+# write.csv(as.data.frame(train),"train_reduced.csv")
+# write.csv(as.data.frame(test),"test_reduced.csv")
+# write.csv(as.data.frame(valid),"valid_reduced.csv")
+
+############################
+
 
 # Define response and predictors #
 response <- "claims_total_building_insurance_coverage_avg"
-predictors <- names(IN_22_scale[,which(!names(IN_22_scale) %in% c("subwatershed", "claims_total_building_insurance_coverage_avg"))])
+predictors <- names(train_mod[,which(!names(train_mod) %in% c("claims_total_building_insurance_coverage_avg"))])
 gc()
+
 
 ###################
 ## Random Forest ##
 ###################
+
+# write.csv(as.data.frame(train),"train_reduced.csv")
+# write.csv(as.data.frame(test),"test_reduced.csv")
+# write.csv(as.data.frame(valid),"valid_reduced.csv")
+
 
 ## run our first predictive model
 rf_IN_22c <- h2o.randomForest(        ## h2o.randomForest function
@@ -194,6 +235,12 @@ h2o.varimp_plot(gbm_IN_22c)
 
 h2o.performance(gbm_IN_22c, test)
 
+
+gbm_performance <- h2o.performance(gbm_IN_22c, test)
+gbm_performance
+
+
+
 #########################
 ### DALEX explainers ####
 #########################
@@ -249,20 +296,35 @@ p2 <- plot(resids_glm, resids_rf, resids_gbm, geom = "boxplot")
 gridExtra::grid.arrange(p1, p2, nrow = 1)
 
 
+####################
 
-##############
-### VIF ######
-##############
+drf_results <- as.data.frame(h2o.predict(rf_IN_22c, test))
+drf_results <- as.data.frame(cbind(as.data.frame(test_df)$subwatershed, drf_results, test_df$claims_total_building_insurance_coverage_avg))
+names(drf_results) <- c("subwatershed", "predicted", "observed")
 
-library(tidyverse)
-library(caret)
+glm_results <- as.data.frame(h2o.predict(glm_IN_22c, test))
+glm_results <- as.data.frame(cbind(as.data.frame(test_df)$subwatershed, glm_results, test_df$claims_total_building_insurance_coverage_avg))
+names(glm_results) <- c("subwatershed", "predicted", "observed")
 
-IN_df <- IN_22_scale[ , -which(names(IN_22_scale) %in% c("orb25yr24ha_am", "orb2yr24ha_am", "orb50yr24ha_am"))]
+gbm_results <- as.data.frame(h2o.predict(gbm_IN_22c, test))
+gbm_results <- as.data.frame(cbind(as.data.frame(test_df)$subwatershed, gbm_results, test_df$claims_total_building_insurance_coverage_avg))
+names(gbm_results) <- c("subwatershed", "predicted", "observed")
 
-IN_df <- IN_df[ , -which(names(IN_df) %in% c("lu_21_area", "lu_22_area", "lu_41_area", "lu_23_area", 
-                                             "lu_82_area", "lu_24_area", "population", "area", "x_area", 
-                                             "housing_density", "watershed_length", "perimeter"))]
+######################
+getwd()
+write.csv(drf_results, "results/drf_results.csv", row.names = FALSE)
+write.csv(glm_results, "results/glm_results.csv", row.names = FALSE)
+write.csv(gbm_results, "results/gbm_results.csv", row.names = FALSE)
 
-mod <- lm(claims_total_building_insurance_coverage_avg ~., data=IN_df)
-a <- car::vif(mod)
-sort(round(a,2))
+############
+
+
+glm_performance
+rf_performance
+gbm_performance
+
+h2o.varimp_plot(glm_IN_22c)
+h2o.varimp_plot(rf_IN_22c)
+h2o.varimp_plot(gbm_IN_22c)
+
+names(test)
