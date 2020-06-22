@@ -2413,7 +2413,6 @@ data/model/glm_prediction.csv
 data/model/glm_results.png
 data/model/hucs700.csv
 data/model/hucs700.xlsx
-data/model/IN_Risk_Model.xlsx
 data/model/keras_history.png
 data/model/keras_init.png
 data/model/keras_lares.png
@@ -2602,7 +2601,6 @@ data/model_data/gbm_prediction.csv
 data/model_data/glm_prediction.csv
 data/model_data/hucs700.csv
 data/model_data/hucs700.xlsx
-data/model_data/IN_Risk_Model.xlsx
 data/model_data/observed.csv
 data/model_data/test_raw.csv
 data/model_data/train_raw.csv
