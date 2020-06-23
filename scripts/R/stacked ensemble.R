@@ -10,6 +10,7 @@ library(keras)
 library(RSNNS)
 library(rlang)
 library(lares)
+library (readr)
 
 # data
 dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk"
