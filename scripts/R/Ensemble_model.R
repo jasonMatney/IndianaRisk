@@ -12,14 +12,16 @@ library(rlang)
 library(lares)
 
 # data
-dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\data\\model\\"
+dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\data\\"
 setwd(dsn)
-IN_df <- read.xlsx(paste0(dsn,"IN_Risk_Model.xlsx"))
+IN_df <- read.xlsx(paste0(dsn,"model_data.xlsx"))
 head(IN_df)
 
 IN_mod <- IN_df[ , !(names(IN_df) %in% c("subwatershed"))]
 
 IN_mod <- IN_mod %>% mutate_if(is.character,as.numeric) 
+df <- IN_mod[complete.cases(IN_mod), ]
+dim(df)
 
 # Start local host with given number of threads plus give memory size
 h2o.init(ip='localhost', port=54321, nthreads=-1, max_mem_size = '20g')
@@ -27,9 +29,9 @@ h2o.init(ip='localhost', port=54321, nthreads=-1, max_mem_size = '20g')
 ###############
 ## NORMALIZE ##
 ###############
-IN_norm <- normalizeData(IN_mod, type='0_1')
+IN_norm <- normalizeData(df, type='0_1')
 colnames(IN_norm) <- names(IN_mod)
-IN_norm_y <- normalizeData(IN_mod$claims_total_building_insurance_coverage_avg, type='0_1')
+IN_norm_y <- normalizeData(df$claims_total_building_insurance_coverage_avg, type='0_1')
 
 # convert into H2O frame
 IN_h2o <- as.h2o(IN_norm)
@@ -242,7 +244,7 @@ print_dot_callback <- callback_lambda(
   }
 )    
 
-epochs <- 150
+epochs <- 20
 batch_size <- 32
 
 # Fit the model and store training stats
@@ -254,14 +256,14 @@ history <- model %>% fit(
   validation_split = 0.1,
   #validation_data = list(x_val, y_val),
   verbose = 1,
-  callbacks = list(print_dot_callback,
-                   callback_early_stopping(monitor = "val_loss", 
-                                           min_delta = 0.05,
-                                           patience = 4, 
-                                           verbose = 1, 
-                                           mode = c("auto", "min", "max"),
-                                           baseline = NULL, 
-                                           restore_best_weights = FALSE)))
+  callbacks = list(print_dot_callback))#,
+                   # callback_early_stopping(monitor = "val_loss", 
+                   #                         min_delta = 0.05,
+                   #                         patience = 4, 
+                   #                         verbose = 1, 
+                   #                         mode = c("auto", "min", "max"),
+                   #                         baseline = NULL, 
+                   #                         restore_best_weights = FALSE)))
 
 summary(model)
 plot(history)
