@@ -14,14 +14,17 @@ library (readr)
 
 h2o.shutdown()
 # data
-dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk"
+dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\data\\"
 setwd(dsn)
-IN_df <- read.xlsx(paste0(dsn,"\\data\\model_data\\IN_Risk_Model.xlsx"))
+IN_df <- read.xlsx(paste0(dsn,"model_data.xlsx"))
 dim(IN_df)
 
 IN_mod <- IN_df[ , !(names(IN_df) %in% c("subwatershed"))]
 
 IN_mod <- IN_mod %>% mutate_if(is.character,as.numeric) 
+df <- IN_mod[complete.cases(IN_mod), ]
+
+head(df)
 
 # Start local host with given number of threads plus give memory size
 h2o.init(ip='localhost', port=54321, nthreads=-1, max_mem_size = '20g')
@@ -34,13 +37,13 @@ predictors <- names(IN_mod[,which(!names(IN_mod) %in% c("claims_total_building_i
 ###############
 ## NORMALIZE ##
 ###############
-IN_norm <- normalizeData(IN_mod, type='0_1')
+IN_norm <- normalizeData(df, type='0_1')
 colnames(IN_norm) <- names(IN_mod)
-IN_norm_x <- normalizeData(IN_mod[,predictors], type='0_1')
-IN_norm_y <- normalizeData(IN_mod[,response], type='0_1')
+IN_norm_x <- normalizeData(df[,predictors], type='0_1')
+IN_norm_y <- normalizeData(df[,response], type='0_1')
 
 IN_norm_index <- as.data.frame(IN_norm)
-IN_norm_index$subwatershed <- IN_df$subwatershed
+IN_norm_index$subwatershed <- df$subwatershed
 head(IN_norm_index)
 # convert into H2O frame
 IN_h2o <- as.h2o(IN_norm_index)
@@ -69,19 +72,69 @@ nfolds <- 5
 #################
 
 
-# # GBM Hyperparamters
-# learn_rate_opt <- c(0.01, 0.03)
-# max_depth_opt <- c(3, 4, 5, 6, 9)
-# sample_rate_opt <- c(0.7, 0.8, 0.9, 1.0)
-# col_sample_rate_opt <- c(0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
-# hyper_params <- list(learn_rate = learn_rate_opt,
-#                      max_depth = max_depth_opt,
-#                      sample_rate = sample_rate_opt,
-#                      col_sample_rate = col_sample_rate_opt)
+# GBM hyperparameters
+learn_rate = seq(0.01,0.1,0.01)
+max_depth = seq(1,10,1)
+sample_rate = seq(0.1,1,0.1)
+col_sample_rate = seq(0.1, 0.9, 0.01)
+
+gbm_params <- list(learn_rate = learn_rate,
+                   max_depth = max_depth,
+                   sample_rate = sample_rate,
+                   col_sample_rate = col_sample_rate)
+
+## DRF 
+ntrees = seq(1,100,10)
+max_depth = seq(1,100,10)
+
+drf_params = list(ntrees = ntrees, 
+                  max_depth = max_depth)
+
+## GLM 
+alpha=seq(0.01, 1, 0.01)
+lambda=seq(0.00000001,0.0001, 0.000001)
+
+glm_params = list(alpha = alpha,
+                  lambda = lambda)
+
+## DEEP LEARNING 
+activation = c("Rectifier", "Maxout", "Tanh", "RectifierWithDropout", "MaxoutWithDropout", "TanhWithDropout")
+hidden = list(c(5, 5, 5, 5, 5), c(10, 10, 10, 10), c(50, 50, 50), c(100, 100, 100))
+epochs = c(50, 100, 200)
+l1 = seq(0, 0.00001, 0.0001)
+l2 = seq(0, 0.00001, 0.0001)
+rate = seq(0, 0.1, 0.01)
+rate_annealing = c(1e-8, 1e-7, 1e-6)
+rho = seq(0.9, 0.999)
+epsilon = c(1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4)
+momentum_start = c(0, 0.5)
+momentum_stable = c(0.99, 0.5, 0)
+input_dropout_ratio = seq(0, 0.5, 0.1)
+max_w2 = c(10, 100, 1000, 1000000)
+
+dpl_params = list(
+  activation = activation, 
+  hidden = hidden,
+  epochs = epochs,
+  l1 = l1, 
+  l2 = l2,
+  rate = rate,
+  rate_annealing = rate_annealing,
+  rho = rho,
+  epsilon = epsilon,
+  momentum_start = momentum_start,
+  momentum_stable = momentum_stable,
+  input_dropout_ratio = input_dropout_ratio,
+  max_w2 = max_w2
+)
 
 search_criteria <- list(strategy = "RandomDiscrete",
-                        max_models = 3,
+                        max_models = 100,
                         seed = 1)
+
+##########################################
+######## GRID Search Models ##############
+##########################################
 
 glm_grid <- h2o.grid(algorithm = "glm",
                      grid_id = "glm_grid",
@@ -91,6 +144,7 @@ glm_grid <- h2o.grid(algorithm = "glm",
                      seed = 1,
                      nfolds = nfolds,
                      keep_cross_validation_predictions = TRUE,
+                     hyper_params = glm_params,
                      search_criteria = search_criteria)
 
 drf_grid <- h2o.grid(algorithm = "drf",
@@ -101,6 +155,7 @@ drf_grid <- h2o.grid(algorithm = "drf",
                      seed = 1,
                      nfolds = nfolds,
                      keep_cross_validation_predictions = TRUE,
+                     hyper_params = drf_params,
                      search_criteria = search_criteria)
 
 gbm_grid <- h2o.grid(algorithm = "gbm",
@@ -108,11 +163,10 @@ gbm_grid <- h2o.grid(algorithm = "gbm",
                      x = x,
                      y = y,
                      training_frame = train,
-                     ntrees = 10,
                      seed = 1,
                      nfolds = nfolds,
                      keep_cross_validation_predictions = TRUE,
-                     hyper_params = hyper_params,
+                     hyper_params = gbm_params,
                      search_criteria = search_criteria)
 
 dl_grid <- h2o.grid(algorithm = "deeplearning",
@@ -123,22 +177,82 @@ dl_grid <- h2o.grid(algorithm = "deeplearning",
                      seed = 1,
                      nfolds = nfolds,
                      keep_cross_validation_predictions = TRUE,
-                     search_criteria = search_criteria)
+                     hyper_params = dpl_params,
+                     search_criteria = search_criteria,
+                     parallelism = 4)
 
 models = c(glm_grid, gbm_grid, drf_grid, dl_grid)
+
+############################################
+### Get the grid results, sorted by RMSE ###
+############################################
+glm_gridperf <- h2o.getGrid(grid_id = "glm_grid",
+                            sort_by = "rmse",
+                            decreasing = FALSE)
+
+gbm_gridperf <- h2o.getGrid(grid_id = "gbm_grid",
+                            sort_by = "rmse",
+                            decreasing = FALSE)
+
+drf_gridperf <- h2o.getGrid(grid_id = "drf_grid",
+                            sort_by = "rmse",
+                            decreasing = FALSE)
+
+dl_gridperf <- h2o.getGrid(grid_id = "dl_grid",
+                            sort_by = "rmse",
+                            decreasing = FALSE)
+print(glm_gridperf)
+print(gbm_gridperf)
+print(drf_gridperf)
+print(dl_gridperf)
+
+
+# Grab the top GLM model, chosen by RMSE
+best_glm <- h2o.getModel(glm_gridperf@model_ids[[1]])
+best_glm
+
+
+
+# Grab the top GBM model, chosen by RMSE
+best_gbm <- h2o.getModel(gbm_gridperf@model_ids[[1]])
+best_gbm
+
+# Grab the top DRF model, chosen by RMSE
+best_drf <- h2o.getModel(drf_gridperf@model_ids[[1]])
+best_drf
+
 # Train a stacked ensemble using the GBM grid
-ensemble <- h2o.stackedEnsemble(x = x,
+glm_ensemble <- h2o.stackedEnsemble(x = x,
                                 y = y,
+                                metalearner_algorithm = "glm",
                                 training_frame = train,
                                 base_models = models)
 
-ensemble
-# Train a stacked ensemble using the GBM grid
-ensemble <- h2o.stackedEnsemble(x = x,
-                                y = y,
-                                seed=1234567,
-                                training_frame = train,
-                                base_models = models)
+gbm_ensemble <- h2o.stackedEnsemble(x = x,
+                                    y = y,
+                                    metalearner_algorithm = "gbm",
+                                    training_frame = train,
+                                    base_models = models)
+
+
+drf_ensemble <- h2o.stackedEnsemble(x = x,
+                                    y = y,
+                                    metalearner_algorithm = "drf",
+                                    training_frame = train,
+                                    base_models = models)
+
+dl_ensemble <- h2o.stackedEnsemble(x = x,
+                                    y = y,
+                                    metalearner_algorithm = "deeplearning",
+                                    training_frame = train,
+                                    base_models = models)
+
+
+# Compare to base learner performance on the test set
+glm_ensemble_test <- h2o.performance(glm_ensemble, newdata = test)
+gbm_ensemble_test <- h2o.performance(gbm_ensemble, newdata = test)
+drf_ensemble_test <- h2o.performance(drf_ensemble, newdata = test)
+dl_ensemble_test <- h2o.performance(dl_ensemble, newdata = test)
 
 
 # Eval ensemble performance on a test set
@@ -155,17 +269,18 @@ baselearner_best_rmse_test <- min(h2o.rmse(perf_glm_test),
                                   h2o.rmse(perf_gbm_test), 
                                   h2o.rmse(perf_dpl_test))
 
-ensemble_rmse_test <- h2o.rmse(perf)
+ensemble_rmse_test <- h2o.rmse(dl_ensemble_test)
 print(sprintf("Best Base-learner Test RMSE:  %s", baselearner_best_rmse_test))
 print(sprintf("Ensemble Test RMSE:  %s", ensemble_rmse_test))
 
 # Generate predictions on a test set (if neccessary)
-pred <- h2o.predict(ensemble, newdata = test)
+pred <- h2o.predict(dl_ensemble, newdata = test)
 
 summary(ensemble)
 pred_ensemble <- as.data.frame(denormalizeData(pred, getNormParameters(IN_norm_y)))
-results <- as.data.frame(cbind(as.data.frame(test$subwatershed), pred_ensemble))
-colnames(results) <- c("subwatershed", "predicted")
+test_backtransform <- round(as.data.frame(denormalizeData(test$claims_total_building_insurance_coverage_avg, getNormParameters(IN_norm_y))),0)
+results <- as.data.frame(cbind(test_backtransform, round(pred_ensemble,0)))
+colnames(results) <- c("claims", "predicted")
 
 IN_test_observed <- IN_df[,c("claims_total_building_insurance_coverage_avg","subwatershed")]
 
@@ -173,9 +288,18 @@ model_results <- results %>% left_join(IN_test_observed, by="subwatershed")
 colnames(model_results) <- c("subwatershed", "predicted", "observed")
 head(model_results)
 
+plot(results$claims, results$predicted, xlim=c(0,50000))
+abline(x=y,col="blue")
 
+h2o.varimp_plot(h2o.getModel(drf_grid@model_ids[[1]]))
 
-# 
+lares::mplot_full(tag = results$claims,
+                  score = results$predicted,
+                  splits = 10,
+                  subtitle = "Ensemble DL Metalearner Results",
+                  model_name = "simple_model_02",
+                  save = T)
+
 # # test_denorm <- as.data.frame(denormalizeData(test, getNormParameters(IN_norm_x)))
 # # 
 # # test_df <- as.data.frame(denormalizeData(pred, getNormParameters(IN_norm_y)))
