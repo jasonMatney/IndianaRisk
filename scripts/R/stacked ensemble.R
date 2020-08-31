@@ -1,4 +1,5 @@
 rm(list=ls())
+options(scipen=999)
 library(h2o)
 library(data.table)
 library(bit64)
@@ -11,52 +12,150 @@ library(RSNNS)
 library(rlang)
 library(lares)
 library (readr)
-
+library(sparklyr)
+library(tidyverse)
+library(caret)
 h2o.shutdown()
 # data
 dsn <- "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\data\\"
 setwd(dsn)
-IN_df <- read.xlsx(paste0(dsn,"model_data.xlsx"))
-dim(IN_df)
+IN_df <- read.xlsx(paste0(dsn,"MOD_DF_08_21.xlsx"))
 
 IN_mod <- IN_df[ , !(names(IN_df) %in% c("subwatershed"))]
+IN_mod <- IN_mod %>% mutate_if(is.character,as.numeric) 
+
+# calulate the correlations
+r <- cor(IN_mod[,1:20], use="complete.obs")
+round(r,2)
+ggcorrplot(r)
+
+### VIF
+training.samples <- IN_mod$mean_claim %>%
+  createDataPartition(p = 0.8, list = FALSE)
+train.data.index  <- IN_mod[training.samples, ]
+test.data.index <- IN_mod[-training.samples, ]
+
+train.data <- train.data.index[ , !(names(train.data.index) %in% c("subwatershed"))]
+test.data <- test.data.index[ , !(names(test.data.index) %in% c("subwatershed"))]
+
+# Build the model
+model1 <- lm(mean_claim ~., data = train.data)
+# Make predictions
+predictions <- model1 %>% predict(test.data)
+# Model performance
+data.frame(
+  RMSE = RMSE(predictions, test.data$mean_claim),
+  R2 = R2(predictions, test.data$mean_claim)
+)
+
+vif_model1 <- car::vif(model1)
+sort(vif_model1)
+
+# new_cols <- names(vif_model1[which( vif_model1 < 10 )])
+new_cols <- names(vif_model1[which(!names(vif_model1) %in% c("subwatershed",
+                                                             "orb100yr06h","orb100yr12h",                 
+                                                             "orb25yr06h","orb25yr12h","orb25yr24h",                  
+                                                             "orb2yr06h","orb2yr12h","orb2yr24h",                
+                                                             "orb50yr06h","orb50yr12h","orb50yr24h",                  
+                                                             "orb100yr06ha_am","orb100yr12ha_am","orb100yr24ha_am",            
+                                                             "orb25yr06ha_am","orb25yr12ha_am","orb25yr24ha_am",          
+                                                             "orb2yr06ha_am","orb2yr12ha_am","orb2yr24ha_am",        
+                                                             "orb50yr06ha_am","orb50yr12ha_am","orb50yr24ha_am",
+                                                             "flow_0_exceedence_prob","flow_0.1_exceedence_prob",    
+                                                             "flow_1_exceedence_prob","flow_10_exceedence_prob",
+                                                             "lu_21_area","lu_22_area","lu_23_area",                  
+                                                             "lu_24_area","lu_41_area","lu_82_area", 
+                                                             "avg_slope",
+                                                             "relief", 
+                                                             "population", 
+                                                             "ruggedness", 
+                                                             "population_density", 
+                                                             "perimeter",
+                                                             "elongation_ratio"
+
+))])
+
+mod_lm_cols <- c("circulatory_ratio",
+"relief_ratio",
+"water_bodies_area",
+"dams_count",
+"population_change",
+"dependent_population_pct",
+"levee_low_crest_elevation_m",
+"flow_50_exceedence_prob", 
+"mean_policy")
+
+# new_cols <- names(vif_model1[which( vif_model1 < 10 )])
+new_cols <- names(IN_df[which(names(IN_df) %in% mod_lm_cols)])
+new_cols <- append(new_cols, "mean_claim")
+
+############################
+
+vif.train.data.index  <- IN_mod[training.samples, new_cols]
+vif.test.data.index <- IN_mod[-training.samples, new_cols]
+
+vif.train.data <- vif.train.data.index[ , !(names(vif.train.data.index) %in% c("subwatershed"))]
+vif.test.data <- vif.test.data.index[ , !(names(vif.test.data.index) %in% c("subwatershed"))]
+
+# Build the model
+vif.model <- lm(mean_claim ~., data = vif.train.data)
+# Make predictions
+vif.predictions <- vif.model %>% predict(vif.test.data)
+# Model performance
+data.frame(
+  RMSE = RMSE(vif.predictions, vif.test.data$mean_claim),
+  R2 = R2(vif.predictions, vif.test.data$mean_claim)
+)
+
+vif.vif_model <- car::vif(vif.model)
+sort(vif.vif_model)
+new_names <- names(vif.vif_model)
+a_new_names <- append(new_names, "mean_claim")
+
+############
+## MODEL ###
+############
 
 IN_mod <- IN_mod %>% mutate_if(is.character,as.numeric) 
-df <- IN_mod[complete.cases(IN_mod), ]
+df <- IN_mod[complete.cases(IN_mod), new_cols]
 
-head(df)
+str(df)
 
 # Start local host with given number of threads plus give memory size
-h2o.init(ip='localhost', port=54321, nthreads=-1, max_mem_size = '20g')
+h2o.init(max_mem_size = '16G')
 
 # Define response and predictors #
-response <- "claims_total_building_insurance_coverage_avg"
-predictors <- names(IN_mod[,which(!names(IN_mod) %in% c("claims_total_building_insurance_coverage_avg", "subwatershed"))])
-
+response <- "mean_claim"
+predictors <- names(df[,which(!names(df) %in% c("mean_claim", "subwatershed"))])
+predictors
 
 ###############
 ## NORMALIZE ##
 ###############
-IN_norm <- normalizeData(df, type='0_1')
-colnames(IN_norm) <- names(IN_mod)
-IN_norm_x <- normalizeData(df[,predictors], type='0_1')
-IN_norm_y <- normalizeData(df[,response], type='0_1')
-
-IN_norm_index <- as.data.frame(IN_norm)
-IN_norm_index$subwatershed <- df$subwatershed
-head(IN_norm_index)
+# IN_norm <- normalizeData(df, type='0_1')
+# colnames(IN_norm) <- names(df)
+# IN_norm_x <- normalizeData(df[,predictors], type='0_1')
+# IN_norm_y <- normalizeData(df[,response], type='0_1')
+# 
+# IN_norm_index <- as.data.frame(IN_norm)
+# IN_norm_index$subwatershed <- df$subwatershed
+# head(IN_norm_index)
 # convert into H2O frame
-IN_h2o <- as.h2o(IN_norm_index)
+IN_h2o <- as.h2o(df)
+
 
 
 ## Splits datasets into train, valid and test
-splits <- h2o.splitFrame(data=IN_h2o, ratios=c(0.8, 0.1), seed=1236)
-names(splits) <- c("train","valid","test")
+splits <- h2o.splitFrame(data=IN_h2o, ratios=c(0.8,0.1), seed=1236)
+names(splits) <- c("train","valid", "test")
 
 train <- splits$train
 valid <- splits$valid
 test <- splits$test
+# dim(test)
 
+# write.xlsx(train, "P:\\Temp\\jMatney\\IndianaML\\AutoML\\train.xlsx")
+# write.xlsx(test, "P:\\Temp\\jMatney\\IndianaML\\AutoML\\test.xlsx")
 
 # Identify predictors and response
 y <- response
@@ -66,6 +165,20 @@ x <- predictors
 # Number of CV folds (to generate level-one data for stacking)
 nfolds <- 5
 
+# Train the DRF model
+cars_drf <- h2o.deeplearning(x = x, y = y,
+                             training_frame = train, 
+                             validation_frame = valid,
+                             seed = 1234)
+
+h2o.r2(cars_drf, valid=TRUE)
+
+# Histogram with density plot
+ggplot(df, aes(x=mean_claim)) + 
+  geom_histogram(aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha=.2, fill="#FF6666") 
+
+h2o.performance(cars_drf, valid=TRUE)
 
 #################
 ## Grid search ##
@@ -84,11 +197,10 @@ gbm_params <- list(learn_rate = learn_rate,
                    col_sample_rate = col_sample_rate)
 
 ## DRF 
-ntrees = seq(1,100,10)
-max_depth = seq(1,100,10)
+ntrees = seq(1,1000,100)
+max_depth = seq(1,1000,100)
 
-drf_params = list(ntrees = ntrees, 
-                  max_depth = max_depth)
+drf_params = list(ntrees = ntrees, max_depth = max_depth)
 
 ## GLM 
 alpha=seq(0.01, 1, 0.01)
@@ -101,16 +213,18 @@ glm_params = list(alpha = alpha,
 activation = c("Rectifier", "Maxout", "Tanh", "RectifierWithDropout", "MaxoutWithDropout", "TanhWithDropout")
 hidden = list(c(5, 5, 5, 5, 5), c(10, 10, 10, 10), c(50, 50, 50), c(100, 100, 100))
 epochs = c(50, 100, 200)
-l1 = seq(0, 0.00001, 0.0001)
-l2 = seq(0, 0.00001, 0.0001)
-rate = seq(0, 0.1, 0.01)
+l1 = c(0, 0.00001, 0.0001)
+l2 = c(0, 0.00001, 0.0001)
+rate = c(0, 0.1, 0.005, 0.001)
 rate_annealing = c(1e-8, 1e-7, 1e-6)
-rho = seq(0.9, 0.999)
-epsilon = c(1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4)
+rho = c(0.9, 0.95, 0.99, 0.999)
+epsilon = c(1e-10, 1e-8, 1e-6, 1e-4)
 momentum_start = c(0, 0.5)
 momentum_stable = c(0.99, 0.5, 0)
-input_dropout_ratio = seq(0, 0.5, 0.1)
+input_dropout_ratio = c(0, 0.1, 0.2)
 max_w2 = c(10, 100, 1000, 1000000)
+
+
 
 dpl_params = list(
   activation = activation, 
@@ -132,6 +246,166 @@ search_criteria <- list(strategy = "RandomDiscrete",
                         max_models = 100,
                         seed = 1)
 
+search_criteria_max_runtime = list(strategy = "RandomDiscrete",
+                                   max_runtime_secs = 600,
+                                   max_models = 100,
+                                   stopping_metric = "RMSE",
+                                   stopping_tolerance = 0.001,
+                                   stopping_rounds = 20, seed = 1)
+
+
+# DRF hyperparameters
+hyper_params_drf <- 
+  list(
+    mtries                   = seq(2, 5, by = 1), 
+    sample_rate              = c(0.65, 0.8, 0.95),
+    col_sample_rate_per_tree = c(0.5, 0.9, 1.0),
+    max_depth                = seq(1, 30, by = 3),
+    min_rows                 = c(1, 2, 5, 10)
+  )
+
+# GBM hyperparameters
+hyper_params_gbm <- 
+  list(
+    learn_rate               = c(0.01, 0.1),
+    sample_rate              = c(0.65, 0.8, 0.95),
+    col_sample_rate_per_tree = c(0.5, 0.9, 1.0),
+    max_depth                = seq(1, 30, by = 3),
+    min_rows                 = c(1, 2, 5, 10)
+  )
+
+# elastic net model 
+glm_model <- 
+  h2o.glm(
+    x               = x,
+    y               = y, 
+    training_frame  = train,
+    validation_frame = valid,
+    balance_classes = TRUE,
+    nfolds          = 10,
+    seed            = 1975
+  )
+
+glm_grid <- h2o.grid(algorithm = "glm",
+                     grid_id = "glm_grid",
+                     x = x,
+                     y = y,
+                     training_frame = train,
+                     validation_frame = valid,
+                     seed = 1,
+                     nfolds = nfolds,
+                     keep_cross_validation_predictions = TRUE,
+                     hyper_params = glm_params,
+                     search_criteria = search_criteria_max_runtime)
+# random forest model
+drf_model_grid <- 
+  h2o.grid(
+    algorithm       = "randomForest", 
+    x               = x, 
+    y               = y,
+    training_frame  = train,
+    validation_frame = valid,
+    balance_classes = TRUE, 
+    nfolds          = 10,
+    ntrees          = 1000,
+    grid_id         = "drf_grid",
+    hyper_params    = hyper_params_drf,
+    search_criteria = search_criteria_all,
+    seed            = 1975
+  )
+
+# gradient boosting machine model
+gbm_model_grid <- 
+  h2o.grid(
+    algorithm       = "gbm",
+    x               = x, 
+    y               = y,
+    training_frame  = train,
+    validation_frame = valid,
+    balance_classes = TRUE, 
+    nfolds          = 10,
+    ntrees          = 1000,
+    grid_id         = "gbm_grid",
+    hyper_params    = hyper_params_gbm,
+    search_criteria = search_criteria_all,
+    seed            = 1975
+  )
+
+
+# mod1 <- h2o.randomForest( x = x, y = y,
+#                        training_frame = train,
+#                        validation_frame = valid,
+#                        seed = 1,
+#                        nfolds = nfolds,
+#                        max_depth = 100,
+#                        ntrees=500)
+# 
+# h2o.r2(mod1, valid=TRUE)
+
+# convert feature variables to a data frame - tibble is also a data frame 
+x_valid <- as.data.frame(valid) %>% select(-mean_claim) %>% as_tibble()
+
+# change response variable to a numeric binary vector
+y_valid <- as.vector(as.numeric(as.character(valid$mean_claim)))
+
+
+test_backtransform <- round(as.data.frame(denormalizeData(test$mean_claim, getNormParameters(IN_norm_y))),0)
+# Generate predictions on a test set (if neccessary)
+best_drf_pred <- h2o.predict(mod1, newdata = test)
+
+# create custom predict function
+pred <- function(model, newdata)  {
+  results <- as.data.frame(h2o.predict(model, newdata %>% as.h2o()))
+  return(results[[3L]])
+}
+
+
+# generalised linear model explainer
+explainer_glm <- explain(
+  model            = glm_model, 
+  type             = "classification",
+  data             = x_valid,
+  y                = y_valid,
+  predict_function = pred,
+  label            = "h2o_glm"
+)
+
+# random forest model explainer
+explainer_drf <- explain(
+  model            = drf_model, 
+  type             = "classification",
+  data             = x_valid,
+  y                = y_valid,
+  predict_function = pred,
+  label            = "h2o_drf"
+)
+
+# gradient boosting machine explainer
+explainer_gbm <- explain(
+  model            = gbm_model, 
+  type             = "classification",
+  data             = x_valid,
+  y                = y_valid,
+  predict_function = pred,
+  label            = "h2o_gbm"
+)
+
+summary(best_drf_pred)
+best_drf_pred_denorm <- as.data.frame(denormalizeData(best_drf_pred, getNormParameters(IN_norm_y)))
+best_drf_results <- as.data.frame(cbind(test_backtransform, round(best_drf_pred_denorm,0)))
+colnames(best_drf_results) <- c("claims", "predicted")
+
+# compute residuals
+residuals = best_drf_results$predicted - best_drf_results$claims
+resids=as.data.frame(residuals)
+
+# plot residuals 
+compare = cbind(
+  as.data.frame(best_drf_results$claims),
+  as.data.frame(resids$residuals))
+
+plot( compare[ ,1:2], xlab = "actual", ylab="residuals")
+
 ##########################################
 ######## GRID Search Models ##############
 ##########################################
@@ -141,47 +415,54 @@ glm_grid <- h2o.grid(algorithm = "glm",
                      x = x,
                      y = y,
                      training_frame = train,
+                     validation_frame = valid,
                      seed = 1,
                      nfolds = nfolds,
                      keep_cross_validation_predictions = TRUE,
                      hyper_params = glm_params,
-                     search_criteria = search_criteria)
+                     search_criteria = search_criteria_max_runtime)
 
 drf_grid <- h2o.grid(algorithm = "drf",
                      grid_id = "drf_grid",
                      x = x,
                      y = y,
                      training_frame = train,
+                     validation_frame = valid,
                      seed = 1,
                      nfolds = nfolds,
                      keep_cross_validation_predictions = TRUE,
                      hyper_params = drf_params,
-                     search_criteria = search_criteria)
+                     search_criteria = search_criteria_max_runtime)
 
 gbm_grid <- h2o.grid(algorithm = "gbm",
                      grid_id = "gbm_grid",
                      x = x,
                      y = y,
                      training_frame = train,
+                     validation_frame = valid,
                      seed = 1,
                      nfolds = nfolds,
                      keep_cross_validation_predictions = TRUE,
                      hyper_params = gbm_params,
                      search_criteria = search_criteria)
 
-dl_grid <- h2o.grid(algorithm = "deeplearning",
-                     grid_id = "dl_grid",
+dpl_grid <- h2o.grid(algorithm = "deeplearning",
+                     grid_id = "dpl_grid",
                      x = x,
                      y = y,
                      training_frame = train,
+                     validation_frame = valid,
                      seed = 1,
                      nfolds = nfolds,
                      keep_cross_validation_predictions = TRUE,
                      hyper_params = dpl_params,
-                     search_criteria = search_criteria,
-                     parallelism = 4)
+                     search_criteria = search_criteria_max_runtime)
 
-models = c(glm_grid, gbm_grid, drf_grid, dl_grid)
+dpl_grid
+
+
+
+models = c(glm_grid, gbm_grid, drf_grid)
 
 ############################################
 ### Get the grid results, sorted by RMSE ###
@@ -190,48 +471,118 @@ glm_gridperf <- h2o.getGrid(grid_id = "glm_grid",
                             sort_by = "rmse",
                             decreasing = FALSE)
 
-gbm_gridperf <- h2o.getGrid(grid_id = "gbm_grid",
-                            sort_by = "rmse",
-                            decreasing = FALSE)
-
 drf_gridperf <- h2o.getGrid(grid_id = "drf_grid",
                             sort_by = "rmse",
                             decreasing = FALSE)
 
-dl_gridperf <- h2o.getGrid(grid_id = "dl_grid",
+gbm_gridperf <- h2o.getGrid(grid_id = "gbm_grid",
+                            sort_by = "rmse",
+                            decreasing = FALSE)
+
+dpl_gridperf <- h2o.getGrid(grid_id = "dpl_grid",
                             sort_by = "rmse",
                             decreasing = FALSE)
 print(glm_gridperf)
 print(gbm_gridperf)
 print(drf_gridperf)
-print(dl_gridperf)
+print(dpl_gridperf)
 
+
+h2o.gainsLift(best_glm)
+
+
+p_glm <- h2o.glm(x = x, y = y, training_frame = train,
+                        validation_frame = valid,
+                        lambda = 0,
+                        remove_collinear_columns = TRUE,
+                        compute_p_values = TRUE)
+
+# take a look at the coefficients_table to see the p_values
+a <- p_glm@model$coefficients_table
+write.xlsx(a, "p_vlaues.xlsx")
+
+mod_lm <- lm(mean_claim ~., data=df)
+summary(mod_lm)
 
 # Grab the top GLM model, chosen by RMSE
 best_glm <- h2o.getModel(glm_gridperf@model_ids[[1]])
 best_glm
+gb
 
+# save the model
+h2o.saveModel(object = best_glm, path = "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\best_models", force = TRUE)
+h2o.r2(best_glm, valid = TRUE)
+
+# Grab the top DRF model, chosen by RMSE
+best_drf <- h2o.getModel(drf_gridperf@model_ids[[1]])
+best_drf
+h2o.varimp_plot(best_drf, num_of_features = 20)
+
+# save the model
+h2o.saveModel(object = best_drf, path = "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\best_models", force = TRUE)
+h2o.r2(best_drf, train = TRUE, valid = TRUE, xval = TRUE)
+plot(best_drf)
+
+a <- lm(mean_claim ~ ., data=df)
+plot(a)
+
+# Calculate performance measures at threshold that maximizes precision
+drf.pred = h2o.predict(best_drf, test)
+drf.perf = h2o.performance(drf.pred)
+
+plot(prostate.perf, type = "cutoffs")     # Plot precision vs. thresholds
+plot(prostate.perf, type = "roc")         # Plot ROC curve
+
+
+# # create custom predict function
+# pred <- function(model, newdata)  {
+#   results <- as.data.frame(h2o.predict(model, as.h2o(newdata)))
+#   return(results[[3L]])
+# }
+# 
+# # random forest explainer
+# explainer_rf <- explain(
+#   model = best_drf,
+#   data = test,
+#   y = y,
+#   predict_function = pred,
+#   label = "h2o rf"
+# )
+# 
+# resids_rf  <- model_performance(explainer_rf)
 
 
 # Grab the top GBM model, chosen by RMSE
 best_gbm <- h2o.getModel(gbm_gridperf@model_ids[[1]])
 best_gbm
+h2o.varimp_plot(best_gbm, num_of_features = 20)
+# save the model
+h2o.saveModel(object = best_gbm, path = "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\best_models", force = TRUE)
+h2o.r2(best_gbm, train=TRUE, valid=TRUE, xval=TRUE)
 
-# Grab the top DRF model, chosen by RMSE
-best_drf <- h2o.getModel(drf_gridperf@model_ids[[1]])
-best_drf
+
+# Grab the top DPL model, chosen by RMSE
+best_dpl <- h2o.getModel(dl_gridperf@model_ids[[1]])
+best_dpl
+h2o.varimp_plot(best_dpl, num_of_features = 20)
+# save the model
+h2o.saveModel(object = best_dpl, path = "C:\\Users\\jmatney\\Documents\\GitHub\\IndianaRisk\\best_models", force = TRUE)
+h2o.r2(best_dpl, valid = TRUE)
+
 
 # Train a stacked ensemble using the GBM grid
 glm_ensemble <- h2o.stackedEnsemble(x = x,
-                                y = y,
-                                metalearner_algorithm = "glm",
-                                training_frame = train,
-                                base_models = models)
+                                    y = y,
+                                    metalearner_algorithm = "glm",
+                                    training_frame = train,
+                                    validation_frame = valid,
+                                    base_models = models)
 
 gbm_ensemble <- h2o.stackedEnsemble(x = x,
                                     y = y,
                                     metalearner_algorithm = "gbm",
                                     training_frame = train,
+                                    validation_frame = valid,
                                     base_models = models)
 
 
@@ -239,265 +590,130 @@ drf_ensemble <- h2o.stackedEnsemble(x = x,
                                     y = y,
                                     metalearner_algorithm = "drf",
                                     training_frame = train,
+                                    validation_frame = valid,
                                     base_models = models)
 
-dl_ensemble <- h2o.stackedEnsemble(x = x,
+dpl_ensemble <- h2o.stackedEnsemble(x = x,
                                     y = y,
                                     metalearner_algorithm = "deeplearning",
                                     training_frame = train,
+                                    validation_frame = valid,
                                     base_models = models)
+# R squared
 
+h2o.r2(glm_ensemble, valid=TRUE)
+h2o.r2(drf_ensemble, valid=TRUE)
+h2o.r2(gbm_ensemble, valid=TRUE)
+h2o.r2(dpl_ensemble, valid=TRUE)
+
+# nash sutcliff coefficient - looks for equal means
+# compare to mean model
+# how often do we get a band right / categorical variable
+
+# how good is the best model? R2
 
 # Compare to base learner performance on the test set
 glm_ensemble_test <- h2o.performance(glm_ensemble, newdata = test)
 gbm_ensemble_test <- h2o.performance(gbm_ensemble, newdata = test)
 drf_ensemble_test <- h2o.performance(drf_ensemble, newdata = test)
-dl_ensemble_test <- h2o.performance(dl_ensemble, newdata = test)
+dpl_ensemble_test <- h2o.performance(dpl_ensemble, newdata = test)
 
-
-# Eval ensemble performance on a test set
-perf <- h2o.performance(ensemble, newdata = test)
 
 # Compare to base learner performance on the test set
 perf_glm_test <- h2o.performance(h2o.getModel(glm_grid@model_ids[[1]]), newdata = test)
 perf_drf_test <- h2o.performance(h2o.getModel(drf_grid@model_ids[[1]]), newdata = test)
 perf_gbm_test <- h2o.performance(h2o.getModel(gbm_grid@model_ids[[1]]), newdata = test)
-perf_dpl_test <- h2o.performance(h2o.getModel(dl_grid@model_ids[[1]]), newdata = test)
+perf_dpl_test <- h2o.performance(h2o.getModel(dpl_grid@model_ids[[1]]), newdata = test)
 
 baselearner_best_rmse_test <- min(h2o.rmse(perf_glm_test), 
                                   h2o.rmse(perf_drf_test), 
                                   h2o.rmse(perf_gbm_test), 
                                   h2o.rmse(perf_dpl_test))
 
-ensemble_rmse_test <- h2o.rmse(dl_ensemble_test)
+ensemble_rmse_test <- h2o.rmse(dpl_ensemble_test)
 print(sprintf("Best Base-learner Test RMSE:  %s", baselearner_best_rmse_test))
 print(sprintf("Ensemble Test RMSE:  %s", ensemble_rmse_test))
 
 # Generate predictions on a test set (if neccessary)
-pred <- h2o.predict(dl_ensemble, newdata = test)
+glm_ensemble_pred <- h2o.predict(glm_ensemble, newdata = test)
 
-summary(ensemble)
-pred_ensemble <- as.data.frame(denormalizeData(pred, getNormParameters(IN_norm_y)))
-test_backtransform <- round(as.data.frame(denormalizeData(test$claims_total_building_insurance_coverage_avg, getNormParameters(IN_norm_y))),0)
-results <- as.data.frame(cbind(test_backtransform, round(pred_ensemble,0)))
-colnames(results) <- c("claims", "predicted")
+summary(glm_ensemble_pred)
+glm_ensemble_pred_denorm <- as.data.frame(denormalizeData(glm_ensemble_pred, getNormParameters(IN_norm_y)))
+test_backtransform <- round(as.data.frame(denormalizeData(test$mean_claim, getNormParameters(IN_norm_y))),0)
+glm_ensemble_results <- as.data.frame(cbind(test_backtransform, round(glm_ensemble_pred_denorm,0)))
+colnames(glm_ensemble_results) <- c("claims", "predicted")
 
-IN_test_observed <- IN_df[,c("claims_total_building_insurance_coverage_avg","subwatershed")]
-
-model_results <- results %>% left_join(IN_test_observed, by="subwatershed")
-colnames(model_results) <- c("subwatershed", "predicted", "observed")
-head(model_results)
-
-plot(results$claims, results$predicted, xlim=c(0,50000))
-abline(x=y,col="blue")
-
-h2o.varimp_plot(h2o.getModel(drf_grid@model_ids[[1]]))
-
-lares::mplot_full(tag = results$claims,
-                  score = results$predicted,
+lares::mplot_full(tag = glm_ensemble_results$claims,
+                  score = glm_ensemble_results$predicted,
                   splits = 10,
-                  subtitle = "Ensemble DL Metalearner Results",
+                  subtitle = "Ensemble GLM Metalearner Results",
                   model_name = "simple_model_02",
                   save = T)
 
-# # test_denorm <- as.data.frame(denormalizeData(test, getNormParameters(IN_norm_x)))
-# # 
-# # test_df <- as.data.frame(denormalizeData(pred, getNormParameters(IN_norm_y)))
-# # 
-# # results <- as.data.frame(cbind(test_df$subwatershed, 
-# #                                pred_ensemble, 
-# #                                test_df$claims_total_building_insurance_coverage_avg))
-# # 
-# # colnames(results) <- c("subwatershed", "predicted claims", "observed claims")
-# # head(results)
-# ############################
+# Generate predictions on a test set (if neccessary)
+best_drf_pred <- h2o.predict(best_drf, newdata = test)
+
+summary(best_drf_pred)
+best_drf_pred_denorm <- as.data.frame(denormalizeData(best_drf_pred, getNormParameters(IN_norm_y)))
+best_drf_results <- as.data.frame(cbind(test_backtransform, round(best_drf_pred_denorm,0)))
+colnames(best_drf_results) <- c("claims", "predicted")
+
+lares::mplot_full(tag = best_drf_results$claims,
+                  score = best_drf_results$predicted,
+                  splits = 10,
+                  subtitle = "Best DRF Results",
+                  model_name = "simple_model_02",
+                  save = T)
+
+# IN_test_observed <- IN_df[,c("mean_claim","subwatershed")]
 # 
-# # # GBM Hyperparamters
-# # learn_rate_opt <- c(0.01, 0.03)
-# # max_depth_opt <- c(3, 4, 5, 6, 9)
-# # sample_rate_opt <- c(0.7, 0.8, 0.9, 1.0)
-# # col_sample_rate_opt <- c(0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
-# # hyper_params <- list(learn_rate = learn_rate_opt,
-# #                      max_depth = max_depth_opt,
-# #                      sample_rate = sample_rate_opt,
-# #                      col_sample_rate = col_sample_rate_opt)
-# # 
-# # search_criteria <- list(strategy = "RandomDiscrete",
-# #                         max_models = 3,
-# #                         seed = 1)
-# # 
-# # 
-# # gbm_grid <- h2o.grid(algorithm = "gbm",
-# #                      grid_id = "gbm_grid_binomial",
-# #                      x = x,
-# #                      y = y,
-# #                      training_frame = train,
-# #                      ntrees = 10,
-# #                      seed = 1,
-# #                      nfolds = nfolds,
-# #                      keep_cross_validation_predictions = TRUE,
-# #                      hyper_params = hyper_params,
-# #                      search_criteria = search_criteria)
-# # 
-# # # Train a stacked ensemble using the GBM grid
-# # ensemble <- h2o.stackedEnsemble(x = x,
-# #                                 y = y,
-# #                                 training_frame = train,
-# #                                 base_models = gbm_grid@model_ids)
-# # 
-# # # Eval ensemble performance on a test set
-# # perf <- h2o.performance(ensemble, newdata = test)
+# model_results <- results %>% left_join(IN_test_observed, by="subwatershed")
+# colnames(model_results) <- c("subwatershed", "predicted", "observed")
+# head(model_results)
+
+# plot(results$claims, results$predicted, xlim=c(0,50000))
+# abline(x=y,col="blue")
 # 
-# # There are a few ways to assemble a list of models to stack toegether:
-# # 1. Train individual models and put them in a list
-# # 2. Train a grid of models
-# # 3. Train several grids of models
-# # Note: All base models must have the same cross-validation folds and
-# # the cross-validated predicted values must be kept.
+# library(ggplot2)
 # 
+# # compute predicted values on our test dataset
+# pred <- h2o.predict(best_drf, newdata = test)
 # 
-# # 1. Generate a 4-model ensemble (GLM + GBM + DRF + DPL)
+# # extract the true 'mpg' values from our test dataset
+# actual <- test$mean_claim
 # 
-# 
-# ## Generalized Linear Model
-# # glm_IN_22c <- h2o.glm(model_id = "glm_IN_22c", 
-# #                       family= "gaussian",
-# #                       x= predictors,
-# #                       y=response,
-# #                       training_frame = train,
-# #                       validation_frame = valid, 
-# #                       nfolds=nfolds,
-# #                       fold_assignment = "Modulo",
-# #                       seed = 23123,
-# #                       lambda = 0,
-# #                       early_stopping = TRUE,
-# #                       keep_cross_validation_predictions = TRUE) # Early stopping               
-# # 
-# # 
-# # ##  Random Forest
-# # drf_IN_22c <- h2o.randomForest(model_id = "rf_IN_22c",             
-# #                           training_frame = train,        
-# #                           validation_frame = valid,      
-# #                           x=predictors,                 
-# #                           y=response, 
-# #                           nfolds=nfolds,
-# #                           fold_assignment = "Modulo",               
-# #                           ntrees = 200,                 
-# #                           max_depth = 10,
-# #                           stopping_metric = "RMSE",
-# #                           stopping_rounds = 10,
-# #                           stopping_tolerance = 0.05,     
-# #                           score_each_iteration = T,      
-# #                           seed = 23123,
-# #                           keep_cross_validation_predictions = TRUE)                    
-# # 
-# # 
-# # ## Gradeint Boosting
-# # gbm_IN_22c <-  h2o.gbm(model_id = "gbm_IN_22c",       
-# #                        x = predictors, 
-# #                        y = response,
-# #                        training_frame = train,
-# #                        nfolds=nfolds,
-# #                        fold_assignment = "Modulo",
-# #                        ntrees = 200,                 
-# #                        max_depth = 10,
-# #                        validation_frame = valid, 
-# #                        stopping_metric = "RMSE",
-# #                        stopping_rounds = 10,
-# #                        stopping_tolerance = 0.05,   
-# #                        score_each_iteration = T,  
-# #                        seed = 23123,
-# #                        keep_cross_validation_predictions = TRUE)
-# 
-# ## Deep Learning
-# ## Hyper Parameter Tuning 
-# 
-# hyper_params <- list(
-#   activation=c("Rectifier","Tanh","Maxout","RectifierWithDropout","TanhWithDropout","MaxoutWithDropout"),
-#   hidden=list(c(20,20),c(50,50),c(30,30,30),c(25,25,25,25)),
-#   input_dropout_ratio=c(0,0.05),
-#   l1=seq(0,1e-4,1e-6),
-#   l2=seq(0,1e-4,1e-6)
+# # produce a data.frame housing our predicted + actual 'mpg' values
+# data <- data.frame(
+#   predicted = pred,
+#   actual    = actual
 # )
+# # a bug in data.frame does not set colnames properly; reset here 
+# names(data) <- c("predicted", "actual")
 # 
-# hyper_params
-# 
-# ## Stop once the top 5 models are within 1% of each other (i.e., the windowed average varies less than 1%)
-# search_criteria = list(strategy = "RandomDiscrete", 
-#                        max_runtime_secs = 360, 
-#                        max_models = 1000, 
-#                        seed=1234567, 
-#                        stopping_rounds=5, 
-#                        stopping_tolerance=1e-2)
-# 
-# dl_models <- h2o.grid(
-#   algorithm="deeplearning",
-#   grid_id = "dl_grid_random",
-#   training_frame=train,
-#   validation_frame=valid, 
-#   x=predictors, 
-#   y=response,
-#   nfolds=nfolds,
-#   epochs=1,
-#   stopping_metric="rmse",
-#   stopping_tolerance=1e-2,        ## stop when logloss does not improve by >=1% for 2 scoring events
-#   stopping_rounds=2,
-#   score_validation_samples=1000,   ## downsample validation set for faster scoring
-#   score_duty_cycle=0.025,         ## don't score more than 2.5% of the wall time
-#   max_w2=10,                      ## can help improve stability for Rectifier
-#   hyper_params = hyper_params,
-#   search_criteria = search_criteria,
-#   keep_cross_validation_predictions = TRUE
-# )                                
-# # grid <- h2o.getGrid("dl_grid_random",sort_by="rmse",decreasing=FALSE)
-# # grid
-# # 
-# # grid@summary_table[1,]
-# # best_model <- h2o.getModel(grid@model_ids[[1]]) ## model with lowest rmse
-# # 
-# # best_model
-# # dpl_IN_22c
-# 
-# #########
-# # dpl_IN_22c <- h2o.deeplearning(model_id = "dpl_IN_22c",
-# #                        x = predictors,
-# #                        y = response,
-# #                        nfolds=nfolds,
-# #                        rho = 0.95,
-# #                        epsilon = 1e-5,
-# #                        fold_assignment = "Modulo",
-# #                        distribution = "gaussian",
-# #                        hidden = c(25,25,25,25,25,1),
-# #                        epochs = 50,
-# #                        train_samples_per_iteration = 16,
-# #                        reproducible = TRUE,
-# #                        activation = "Tanh",
-# #                        loss = "Quadratic",
-# #                        l1=1e-5,
-# #                        l2=1e-5,
-# #                        seed = 23123,
-# #                        # stopping_metric = "RMSE",
-# #                        # stopping_tolerance=1e-4,        ## stop when misclassification does not improve by >=1% for 2 scoring events
-# #                        # stopping_rounds=4,
-# #                        training_frame = train,
-# #                        validation_frame = valid,
-# #                        keep_cross_validation_predictions = TRUE)
-# 
-# # plot(dpl_IN_22c)
-# # 
-# # # Train a stacked ensemble using the GBM and RF above
-# # # ensemble <- h2o.stackedEnsemble(model_id = "ensemble_IN_22c",
-# # #                                 x = predictors,
-# # #                                 y = response,
-# # #                                 training_frame = train,
-# # #                                 validation_frame = valid,
-# # #                                 metalearner_algorithm = "deeplearning",
-# # #                                 metalearner_nfolds = nfolds,
-# # #                                 metalearner_fold_assignment = "Modulo",
-# # #                                 seed = 23123,
-# # #                                 base_models = list(glm_IN_22c,
-# # #                                                    drf_IN_22c,
-# # #                                                    gbm_IN_22c,
-# # #                                                    best_model))
-# # 
-# # h2o.varimp_plot(dpl_IN_22c)
+# # plot predicted vs. actual values
+# ggplot(best_drf_results, aes(x = claims, y = predicted)) +
+#   geom_abline(lty = "dashed", col = "red") +
+#   geom_point() +
+#   theme(plot.title = element_text(hjust = 0.5)) +
+#   coord_fixed(ratio = 1) +
+#   labs(
+#     x = "Actual",
+#     y = "Predicted",
+#     title = "Predicted vs. Actual"
+#   )
+
+  sc <- spark_connect(master = "local")
+  iris_tbl <- sdf_copy_to(sc, iris, name = "iris_tbl", overwrite = TRUE)
+  
+  partitions <- iris_tbl %>%
+    sdf_random_split(training = 0.7, test = 0.3, seed = 1111)
+  
+  iris_training <- partitions$training
+  iris_test <- partitions$test
+  
+  rf_model <- iris_training %>%
+    ml_random_forest(Species ~ ., type = "classification")
+  
+  pred <- ml_predict(rf_model, iris_test)
+  
+  ml_multiclass_classification_evaluator(pred)
